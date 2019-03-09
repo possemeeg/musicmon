@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 
 import logging
+import os
 import subprocess
 import json
+import zipfile
 from telegram.ext import Updater, CommandHandler, Job
 from time import sleep
 """
@@ -14,21 +16,64 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 logger = logging.getLogger(__name__)
 
-source_dir = 'music/sonos'
-#source_dir = 'test'
+remote_dir = 'pmgpcloud:music/sonos'
+recieve_dir = 'received'
+staging_dir = 'unzipped'
+dest_dir = 'sonos'
 
-def _process_newfiles():
-    lsjson = subprocess.check_output(['rclone', 'lsjson', 'pmgpcloud:{}'.format(source_dir)])
-    newfiles = json.loads(lsjson)
+def prep_newfile(filename):
+    logger.info('processing {}'.format(filename))
+    probe = json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename]))
+    logger.info('probe {}'.format(probe))
+    stream = next(iter([s for s in probe['streams'] if 'sample_fmt' in s and 'sample_rate' in s]), None)
+    if stream is None:
+        logger.info('file {} does not contain audio'.format(filename))
+        return
+
+    #logger.info('stream {}'.format(stream)
+    #
+    #logger.info('file {} has sample format {} amd rate {}'.format(filename, probe['streams'][0]['sample_fmt'], probe['streams'][0]['sample_rate']))
+
+    #if probe['streams'][0]['sample_fmt'] == 's32' or int(probe['streams'][0]['sample_rate']) > 44100:
+    #    logger.info('transcoding {}'.format(filename))
+    #else:
+    #    logger.info('file {} is suitable for sonos'.format(filename))
+
+
+
+def prep_newfiles():
+    for root, subdirs, files in os.walk(staging_dir):
+        for filename in [os.path.join(root, f) for f in files]:
+            prep_newfile(filename)
+
+def expand_newfiles():
+    os.makedirs(staging_dir, exist_ok=True)
+
+    for zipped in [os.path.join(recieve_dir, f) for f in os.listdir(recieve_dir)]:
+        logger.info('unzipping {}'.format(zipped))
+        try:
+            zip_ref = zipfile.ZipFile(zipped, 'r')
+            zip_ref.extractall(staging_dir)
+            zip_ref.close()
+        except zipfile.BadZipFile:
+            logger.error('{} is invalid - ignoring'.format(zipped))
+
+
+def copy_newfiles():
+    newfiles = json.loads(subprocess.check_output(['rclone', 'lsjson', '{}'.format(remote_dir)]))
+
+    os.makedirs(recieve_dir, exist_ok=True)
 
     for f in newfiles:
         logger.info('Copying {}'.format(f['Path']))
-        lsjson = subprocess.check_output(['rclone', 'copy', 'pmgpcloud:{}/{}'.format(source_dir, f['Path']), '.'])
+        lsjson = subprocess.check_output(['rclone', 'copy', '{}/{}'.format(remote_dir, f['Path']), recieve_dir])
 
 def process_newfiles(context):
     logger.info('starting to process new files')
 
-    _process_newfiles()
+    copy_newfiles()
+    expand_newfiles()
+    prep_newfiles()
 
     logger.info('new files processed')
     context.bot.send_message(context.job.context, text='library up to date')
@@ -54,5 +99,5 @@ def main():
     updater.idle()
 
 if __name__ == '__main__':
-    _process_newfiles()
+    prep_newfiles()
     #main()
