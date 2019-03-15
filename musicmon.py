@@ -5,6 +5,7 @@ import os
 import subprocess
 import json
 import zipfile
+import shutil
 from telegram.ext import Updater, CommandHandler, Job
 from time import sleep
 """
@@ -21,7 +22,15 @@ recieve_dir = 'received'
 staging_dir = 'unzipped'
 dest_dir = 'sonos'
 
-def prep_newfile(filename):
+def transcode_newfile(filename, dest_filename):
+    logger.info('transcoding {} -> {}'.format(filename, dest_filename))
+    subprocess.check_output(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', dest_filename])
+
+def copy_newfile(filename, dest_filename):
+    logger.info('copying {} -> {}'.format(filename, dest_filename))
+    shutil.copyfile(filename, dest_filename)
+
+def prep_newfile(filename, dest_filename):
     logger.info('processing {}'.format(filename))
     probe = json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename]))
     logger.info('probe {}'.format(probe))
@@ -30,21 +39,20 @@ def prep_newfile(filename):
         logger.info('file {} does not contain audio'.format(filename))
         return
 
-    #logger.info('stream {}'.format(stream)
-    #
-    #logger.info('file {} has sample format {} amd rate {}'.format(filename, probe['streams'][0]['sample_fmt'], probe['streams'][0]['sample_rate']))
-
-    #if probe['streams'][0]['sample_fmt'] == 's32' or int(probe['streams'][0]['sample_rate']) > 44100:
-    #    logger.info('transcoding {}'.format(filename))
-    #else:
-    #    logger.info('file {} is suitable for sonos'.format(filename))
-
+    os.makedirs(os.path.dirname(dest_filename), exist_ok=True)
+    
+    if probe['streams'][0]['sample_fmt'] == 's32' or int(probe['streams'][0]['sample_rate']) > 44100:
+        transcode_newfile(filename, dest_filename)
+    else:
+        copy_newfile(filename, dest_filename)
 
 
 def prep_newfiles():
     for root, subdirs, files in os.walk(staging_dir):
         for filename in [os.path.join(root, f) for f in files]:
-            prep_newfile(filename)
+            dest_filename = os.path.join(dest_dir, filename[filename.index(os.sep, len(staging_dir)) + len(os.sep):])
+            logger.info('File {} ->  {}'.format(filename, dest_filename))
+            prep_newfile(filename, dest_filename)
 
 def expand_newfiles():
     os.makedirs(staging_dir, exist_ok=True)
