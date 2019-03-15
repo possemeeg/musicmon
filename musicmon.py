@@ -24,24 +24,19 @@ dest_dir = 'sonos'
 
 def transcode_newfile(filename, dest_filename):
     logger.info('transcoding {} -> {}'.format(filename, dest_filename))
-    subprocess.check_output(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', dest_filename])
+    subprocess.check_output(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-map', '0', '-map', '-V', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'quiet', dest_filename])
 
 def copy_newfile(filename, dest_filename):
     logger.info('copying {} -> {}'.format(filename, dest_filename))
     shutil.copyfile(filename, dest_filename)
 
 def prep_newfile(filename, dest_filename):
-    logger.info('processing {}'.format(filename))
     probe = json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename]))
-    logger.info('probe {}'.format(probe))
     stream = next(iter([s for s in probe['streams'] if 'sample_fmt' in s and 'sample_rate' in s]), None)
-    if stream is None:
-        logger.info('file {} does not contain audio'.format(filename))
-        return
 
     os.makedirs(os.path.dirname(dest_filename), exist_ok=True)
-    
-    if probe['streams'][0]['sample_fmt'] == 's32' or int(probe['streams'][0]['sample_rate']) > 44100:
+
+    if stream is not None and (stream['sample_fmt'] == 's32' or int(stream['sample_rate']) > 44100):
         transcode_newfile(filename, dest_filename)
     else:
         copy_newfile(filename, dest_filename)
@@ -73,15 +68,24 @@ def copy_newfiles():
     os.makedirs(recieve_dir, exist_ok=True)
 
     for f in newfiles:
-        logger.info('Copying {}'.format(f['Path']))
+        logger.info('Copying {} from {}'.format(f['Path'], remote_dir))
         lsjson = subprocess.check_output(['rclone', 'copy', '{}/{}'.format(remote_dir, f['Path']), recieve_dir])
+
+def cleanup():
+    logger.info('Removing interum directories')
+    shutil.rmtree(recieve_dir)
+    shutil.rmtree(staging_dir)
+
+def newfile_livecycle():
+    copy_newfiles()
+    expand_newfiles()
+    prep_newfiles()
+    cleanup()
 
 def process_newfiles(context):
     logger.info('starting to process new files')
 
-    copy_newfiles()
-    expand_newfiles()
-    prep_newfiles()
+    newfile_livecycle()
 
     logger.info('new files processed')
     context.bot.send_message(context.job.context, text='library up to date')
@@ -107,5 +111,5 @@ def main():
     updater.idle()
 
 if __name__ == '__main__':
-    prep_newfiles()
     #main()
+    newfile_livecycle()
