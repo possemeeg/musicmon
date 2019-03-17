@@ -33,7 +33,7 @@ logger.info('Starting up...')
 
 def transcode_newfile(filename, dest_filename):
     logger.info('transcoding {} -> {}'.format(filename, dest_filename))
-    command(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-map', '0', '-map', '-V', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'quiet', dest_filename])
+    command(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', dest_filename])
 
 def copy_newfile(filename, dest_filename):
     logger.info('copying {} -> {}'.format(filename, dest_filename))
@@ -41,7 +41,7 @@ def copy_newfile(filename, dest_filename):
 
 def prep_newfile(filename, dest_filename):
     str_probe = command(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename])
-    probe = json.loads(str_probe.decode("utf-8"))
+    probe = json.loads(str_probe)
     stream = next(iter([s for s in probe['streams'] if 'sample_fmt' in s and 'sample_rate' in s]), None)
 
     os.makedirs(os.path.dirname(dest_filename), exist_ok=True)
@@ -74,7 +74,7 @@ def expand_newfiles():
 
 def copy_newfiles():
     str_newfiles = command(['rclone', 'lsjson', '{}'.format(remote_dir)])
-    newfiles = json.loads(str_newfiles.decode("utf-8"))
+    newfiles = json.loads(str_newfiles)
 
     os.makedirs(recieve_dir, exist_ok=True)
 
@@ -107,7 +107,7 @@ def command(params):
     try:
         df = Popen(params, stdout=PIPE)
         output, err = df.communicate()
-        return output
+        return output.decode("utf-8")
     except CalledProcessError as e:
         logger.error("Failure running command %s: %s", err, e)
         raise
