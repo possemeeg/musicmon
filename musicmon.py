@@ -1,37 +1,47 @@
 #!/usr/bin/env python
 
 import logging
+from logging.handlers import RotatingFileHandler
 import os
-import subprocess
+from subprocess import PIPE, CalledProcessError, Popen
 import json
 import zipfile
 import shutil
+import sys
 from telegram.ext import Updater, CommandHandler, Job
 from time import sleep
 """
 ffprobe -v error -show_entries stream=sample_fmt,sample_rate -of json  "./Gregorian/The Dark Side/Disc 1 - 06 - Close My Eyes Forever.flac"
 ffmpeg -i "$1" -c:a flac -sample_fmt s16 -ar 44100 "${S16}"
-"""
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     level=logging.INFO)
-
-logger = logging.getLogger(__name__)
+"""
 
 remote_dir = 'pmgpcloud:music/sonos'
-recieve_dir = 'received'
-staging_dir = 'unzipped'
-dest_dir = 'sonos'
+recieve_dir = '/var/musicmon/received'
+staging_dir = '/var/musicmon/unzipped'
+dest_dir = '/mnt/sonos/'
+log_file = '/var/log/musicmon.log'
+
+logger = logging.getLogger("musicmon")
+logger.setLevel(logging.INFO)
+handler = RotatingFileHandler(log_file, maxBytes=4096, backupCount=5)
+handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(message)s'))
+logger.addHandler(handler)
+
+logger.info('Starting up...')
 
 def transcode_newfile(filename, dest_filename):
     logger.info('transcoding {} -> {}'.format(filename, dest_filename))
-    subprocess.check_output(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-map', '0', '-map', '-V', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'quiet', dest_filename])
+    command(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-map', '0', '-map', '-V', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'quiet', dest_filename])
 
 def copy_newfile(filename, dest_filename):
     logger.info('copying {} -> {}'.format(filename, dest_filename))
     shutil.copyfile(filename, dest_filename)
 
 def prep_newfile(filename, dest_filename):
-    probe = json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename]))
+    str_probe = command(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename])
+    probe = json.loads(str_probe.decode("utf-8"))
     stream = next(iter([s for s in probe['streams'] if 'sample_fmt' in s and 'sample_rate' in s]), None)
 
     os.makedirs(os.path.dirname(dest_filename), exist_ok=True)
@@ -63,13 +73,14 @@ def expand_newfiles():
 
 
 def copy_newfiles():
-    newfiles = json.loads(subprocess.check_output(['rclone', 'lsjson', '{}'.format(remote_dir)]))
+    str_newfiles = command(['rclone', 'lsjson', '{}'.format(remote_dir)])
+    newfiles = json.loads(str_newfiles.decode("utf-8"))
 
     os.makedirs(recieve_dir, exist_ok=True)
 
     for f in newfiles:
         logger.info('Copying {} from {}'.format(f['Path'], remote_dir))
-        lsjson = subprocess.check_output(['rclone', 'copy', '{}/{}'.format(remote_dir, f['Path']), recieve_dir])
+        lsjson = command(['rclone', 'copy', '{}/{}'.format(remote_dir, f['Path']), recieve_dir])
 
 def cleanup():
     logger.info('Removing interum directories')
@@ -80,15 +91,27 @@ def newfile_livecycle():
     copy_newfiles()
     expand_newfiles()
     prep_newfiles()
-    cleanup()
+    #cleanup()
 
 def process_newfiles(context):
     logger.info('starting to process new files')
+    try:
+        newfile_livecycle()
 
-    newfile_livecycle()
+        logger.info('new files processed')
+        context.bot.send_message(context.job.context, text='library up to date')
+    except Exception as error:
+        logger.exception(error)
 
-    logger.info('new files processed')
-    context.bot.send_message(context.job.context, text='library up to date')
+def command(params):
+    try:
+        df = Popen(params, stdout=PIPE)
+        output, err = df.communicate()
+        return output
+    except CalledProcessError as e:
+        logger.error("Failure running command %s: %s", err, e)
+        raise
+
 
 def newfiles(update, context):
     context.job_queue.run_once(process_newfiles, 0, context=update.message.chat_id)
@@ -99,7 +122,7 @@ def error(update, context):
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
 def main():
-    updater = Updater("<token>", use_context=True)
+    updater = Updater(sys.argv[1], use_context=True)
 
     dp = updater.dispatcher
 
@@ -111,5 +134,7 @@ def main():
     updater.idle()
 
 if __name__ == '__main__':
-    #main()
-    newfile_livecycle()
+    try:
+        main()
+    except Exception as error:
+        logger.exception(error)
