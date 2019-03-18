@@ -25,10 +25,17 @@ log_file = /var/log/musicmon.log
 """
 
 class Main:
-    def __init__(self, config, logger):
-        self.logger = logger
-        self.token = config['default']['remote_token']
-        self.log_chat_id = config['default']['log_chat_id']
+    def __init__(self, config):
+        self.logger = logging.getLogger("musicmon")
+        handler = RotatingFileHandler(config['default']['log_file'], maxBytes=4096, backupCount=5)
+        handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(message)s'))
+        self.logger.addHandler(handler)
+        self.updater = Updater(config['default']['remote_token'], use_context=True)
+        bot_handler = BotLogHandler(self.updater.bot, config['default']['log_chat_id'])
+        bot_handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(message)s'))
+        self.logger.addHandler(bot_handler)
+        self.logger.setLevel(logging.INFO)
+
         self.remote_dir = config['default']['remote_dir']
         self.recieve_dir = config['default']['recieve_dir']
         self.staging_dir = config['default']['staging_dir']
@@ -60,20 +67,20 @@ class Main:
         for root, subdirs, files in os.walk(staging_dir):
             for filename in [os.path.join(root, f) for f in files]:
                 dest_filename = os.path.join(dest_dir, filename[filename.index(os.sep, len(staging_dir)) + len(os.sep):])
-                logger.info('File {} ->  {}'.format(filename, dest_filename))
+                self.logger.info('File {} ->  {}'.format(filename, dest_filename))
                 prep_newfile(filename, dest_filename)
     
     def expand_newfiles(self):
         os.makedirs(staging_dir, exist_ok=True)
     
         for zipped in [os.path.join(recieve_dir, f) for f in os.listdir(recieve_dir)]:
-            logger.info('unzipping {}'.format(zipped))
+            self.logger.info('unzipping {}'.format(zipped))
             try:
                 zip_ref = zipfile.ZipFile(zipped, 'r')
                 zip_ref.extractall(staging_dir)
                 zip_ref.close()
             except zipfile.BadZipFile:
-                logger.error('{} is invalid - ignoring'.format(zipped))
+                self.logger.error('{} is invalid - ignoring'.format(zipped))
     
     
     def copy_newfiles(self):
@@ -83,32 +90,32 @@ class Main:
         os.makedirs(recieve_dir, exist_ok=True)
     
         for f in newfiles:
-            logger.info('Copying {} from {}'.format(f['Path'], remote_dir))
+            self.logger.info('Copying {} from {}'.format(f['Path'], remote_dir))
             lsjson = command(['rclone', 'copy', '{}/{}'.format(remote_dir, f['Path']), recieve_dir])
     
     def cleanup(self):
-        logger.info('Removing interum directories')
+        self.logger.info('Removing interum directories')
         shutil.rmtree(recieve_dir)
         shutil.rmtree(staging_dir)
     
     def newfile_livecycle(self):
-        logger.info('Testing only so not doing anything')
+        self.logger.info('Testing only so not doing anything')
         #self.copy_newfiles()
         #self.expand_newfiles()
         #self.prep_newfiles()
         #self.cleanup()
     
     def process_newfiles(self, context):
-        logger.info('starting to process new files')
+        self.logger.info('starting to process new files')
         info = context.bot.send_message(chat_id=self.log_chat_id, text='starting to process new fileslibrary up to date')
-        logger.info(info)
+        self.logger.info(info)
         try:
             self.newfile_livecycle()
     
-            logger.info('new files processed')
+            self.logger.info('new files processed')
             context.bot.send_message(context.job.context, text='library up to date')
         except Exception as error:
-            logger.exception(error)
+            self.logger.exception(error)
     
     def command(self, params):
         try:
@@ -116,53 +123,49 @@ class Main:
             output, err = df.communicate()
             return output.decode("utf-8")
         except CalledProcessError as e:
-            logger.error("Failure running command %s: %s", err, e)
+            self.logger.error("Failure running command %s: %s", err, e)
             raise
     
     
     def newfiles(self, update, context):
         try:
-            logger.info('newfiles command')
+            self.logger.info('newfiles command')
             context.job_queue.run_once(self.process_newfiles, 0, context=update.message.chat_id)
             update.message.reply_text('roger that')
         except Exception as error:
-            logger.exception(error)
+            self.logger.exception(error)
     
     def error(self, update, context):
         """Log Errors caused by Updates."""
-        logger.warning('Update "%s" caused error "%s"', update, context.error)
-    
-    def main(self):
-        updater = Updater(self.token, use_context=True)
-    
-        dp = updater.dispatcher
-    
+        self.logger.warning('Update "%s" caused error "%s"', update, context.error)
+
+    def run(self):
+        self.logger.info('Starting up...')
+
+        dp = self.updater.dispatcher
         dp.add_handler(CommandHandler("newfiles", self.newfiles, pass_args=True, pass_job_queue=True, pass_chat_data=True))
         dp.add_error_handler(self.error)
-    
         updater.start_polling()
-    
         updater.idle()
 
-class ChannelHandler(StreamHandler):
-    def __init__(self, chat_id):
+    def main(self):
+        try:
+            self.run()
+        except Exception as error:
+            self.logger.exception(error)
+
+
+class BotLogHandler(logging.StreamHandler):
+    def __init__(self, bot, chat_id):
+        super(BotLogHandler, self).__init__()
+        self.bot = bot
         self.chat_id = chat_id
 
     def emit(self, record):
         msg = self.format(record)
+        self.bot.send_message(chat_id=self.chat_id, text=msg)
 
 if __name__ == '__main__':
     config = configparser.ConfigParser()
     config.read_file(open(sys.argv[1]))
-    #config.read_file('/Users/petermetcalf/pmg/musicmon/config.ini')
-    logger = logging.getLogger("musicmon")
-    logger.setLevel(logging.INFO)
-    handler = RotatingFileHandler(config['default']['log_file'], maxBytes=4096, backupCount=5)
-    handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(message)s'))
-    logger.addHandler(handler)
-    logger.info('Starting up...')
-
-    try:
-        Main(config, logger).main()
-    except Exception as error:
-        logger.exception(error)
+    Main(config).main()
