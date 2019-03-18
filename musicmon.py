@@ -28,10 +28,12 @@ class Main:
     def __init__(self, config, logger):
         self.logger = logger
         self.token = config['default']['remote_token']
+        self.log_chat_id = config['default']['log_chat_id']
         self.remote_dir = config['default']['remote_dir']
         self.recieve_dir = config['default']['recieve_dir']
         self.staging_dir = config['default']['staging_dir']
         self.dest_dir = config['default']['dest_dir']
+
 
     def transcode_newfile(self, filename, dest_filename):
         self.logger.info('transcoding {} -> {}'.format(filename, dest_filename))
@@ -98,7 +100,7 @@ class Main:
     
     def process_newfiles(self, context):
         logger.info('starting to process new files')
-        info = context.bot.send_message(chat_id='-1001418912668', text='starting to process new fileslibrary up to date')
+        info = context.bot.send_message(chat_id=self.log_chat_id, text='starting to process new fileslibrary up to date')
         logger.info(info)
         try:
             self.newfile_livecycle()
@@ -141,6 +143,13 @@ class Main:
         updater.start_polling()
     
         updater.idle()
+
+class ChannelHandler(StreamHandler):
+    def __init__(self, chat_id):
+        self.chat_id = chat_id
+
+    def emit(self, record):
+        msg = self.format(record)
 
 if __name__ == '__main__':
     config = configparser.ConfigParser()
