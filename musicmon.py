@@ -27,14 +27,15 @@ log_file = /var/log/musicmon.log
 class Main:
     def __init__(self, config):
         self.logger = logging.getLogger("musicmon")
-        handler = RotatingFileHandler(config['default']['log_file'], maxBytes=4096, backupCount=5)
+        handler = RotatingFileHandler(config['default']['log_file'], maxBytes=14096, backupCount=2)
         handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(message)s'))
         self.logger.addHandler(handler)
         self.updater = Updater(config['default']['remote_token'], use_context=True)
         bot_handler = BotLogHandler(self.updater.bot, config['default']['log_chat_id'])
         bot_handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(message)s'))
-        #self.logger.addHandler(bot_handler)
-        self.logger.setLevel(logging.INFO)
+        bot_handler.setLevel(logging.WARNING)
+        self.logger.addHandler(bot_handler)
+        self.logger.setLevel(logging.DEBUG)
 
         self.remote_dir = config['default']['remote_dir']
         self.recieve_dir = config['default']['recieve_dir']
@@ -42,18 +43,65 @@ class Main:
         self.dest_dir = config['default']['dest_dir']
 
 
-    def transcode_newfile(self, filename, dest_filename):
-        self.logger.info('transcoding {} -> {}'.format(filename, dest_filename))
-        self.command(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', dest_filename])
     
-    def copy_newfile(self, filename, dest_filename):
-        self.logger.info('copying {} -> {}'.format(filename, dest_filename))
-        shutil.copyfile(filename, dest_filename)
+
+    
+    def cleanup(self):
+        self.logger.info('Removing interum directories')
+        shutil.rmtree(self.recieve_dir)
+        shutil.rmtree(self.staging_dir)
+    
+    def newfile_lifecycle(self):
+        newfiles = self.query_newfiles()
+        self.logger.info('new files to process: {}'.format(newfiles))
+        self.copy_newfiles(newfiles)
+        self.expand_newfiles(newfiles)
+        self.prep_newfiles(newfiles)
+        self.cleanup()
+    
+    def query_newfiles(self):
+        str_newfiles = self.command(['rclone', 'lsjson', '{}'.format(self.remote_dir)])
+        return json.loads(str_newfiles)
+    
+    def copy_newfiles(self, newfiles):
+        self.logger.info('Copying new files')
+        os.makedirs(self.recieve_dir, exist_ok=True)
+    
+        for f in newfiles:
+            self.logger.info('Copying {} from {}'.format(f['Path'], self.remote_dir))
+            f['recieved'] = os.path.join(self.recieve_dir, f['Path'])
+            lsjson = self.command(['rclone', 'copy', '{}/{}'.format(self.remote_dir, f['Path']), self.recieve_dir])
+
+    def expand_newfiles(self, newfiles):
+        self.logger.info('Expanding new files')
+        os.makedirs(self.staging_dir, exist_ok=True)
+    
+        for newfile in newfiles:
+            zipped = newfile['recieved']
+            self.logger.info('unzipping {}'.format(zipped))
+            try:
+                zip_ref = zipfile.ZipFile(zipped, 'r')
+                newfile['filelist'] = zip_ref.namelist()
+                zip_ref.extractall(self.staging_dir)
+                zip_ref.close()
+            except zipfile.BadZipFile:
+                self.logger.error('{} is invalid - ignoring'.format(zipped))
+
+    def prep_newfiles(self, newfiles):
+        self.logger.info('prepping new files {}'.format(newfiles))
+        for newfile in newfiles:
+            for filename in [os.path.join(self.staging_dir, f) for f in newfile['filelist']]:
+                dest_filename = self.replace_root(filename, self.staging_dir, self.dest_dir)
+                self.logger.info('File {} -> {}'.format(filename, dest_filename))
+                self.prep_newfile(filename, dest_filename)
+
+    def replace_root(self, filename, old, new):
+        return os.path.join(new, filename[filename.index(os.sep, len(old)) + len(os.sep):])
     
     def prep_newfile(self, filename, dest_filename):
         str_probe = self.command(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename])
         probe = json.loads(str_probe)
-        stream = next(iter([s for s in probe['streams'] if 'sample_fmt' in s and 'sample_rate' in s]), None)
+        stream = next(iter([s for s in probe['streams'] if 'sample_fmt' in s and 'sample_rate' in s]), None) if 'streams' in probe else None
     
         os.makedirs(os.path.dirname(dest_filename), exist_ok=True)
     
@@ -62,69 +110,44 @@ class Main:
         else:
             self.copy_newfile(filename, dest_filename)
     
+    def transcode_newfile(self, filename, dest_filename):
+        self.logger.info('transcoding {} -> {}'.format(filename, dest_filename))
+        self.command(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', dest_filename])
     
-    def prep_newfiles(self):
-        for root, subdirs, files in os.walk(staging_dir):
-            for filename in [os.path.join(root, f) for f in files]:
-                dest_filename = os.path.join(dest_dir, filename[filename.index(os.sep, len(staging_dir)) + len(os.sep):])
-                self.logger.info('File {} ->  {}'.format(filename, dest_filename))
-                prep_newfile(filename, dest_filename)
-    
-    def expand_newfiles(self):
-        os.makedirs(staging_dir, exist_ok=True)
-    
-        for zipped in [os.path.join(recieve_dir, f) for f in os.listdir(recieve_dir)]:
-            self.logger.info('unzipping {}'.format(zipped))
-            try:
-                zip_ref = zipfile.ZipFile(zipped, 'r')
-                zip_ref.extractall(staging_dir)
-                zip_ref.close()
-            except zipfile.BadZipFile:
-                self.logger.error('{} is invalid - ignoring'.format(zipped))
-    
-    
-    def query_newfiles(self):
-        str_newfiles = self.command(['rclone', 'lsjson', '{}'.format(self.remote_dir)])
-        return json.loads(str_newfiles)
-    
-    def copy_newfiles(self, newfiles):
-        os.makedirs(self.recieve_dir, exist_ok=True)
-    
-        for f in newfiles:
-            self.logger.info('Copying {} from {}'.format(f['Path'], self.remote_dir))
-            f['recieved'] = os.path.join(self.recieve_dir], f['Path'])
-            lsjson = self.command(['rclone', 'copy', '{}/{}'.format(self.remote_dir, f['Path']), f['recieved']])
-
-    def cleanup(self):
-        self.logger.info('Removing interum directories')
-        shutil.rmtree(recieve_dir)
-        shutil.rmtree(staging_dir)
-    
-    def newfile_livecycle(self):
-        self.logger.info('Testing only so not doing anything')
-        newfiles = self.query_newfiles()
-        self.logger.info('new files to process: {}'.format(newfiles))
-        self.copy_newfiles(newfiles)
-        self.expand_newfiles(newfiles)
-        #self.prep_newfiles()
-        #self.cleanup()
+    def copy_newfile(self, filename, dest_filename):
+        self.logger.info('copying {} -> {}'.format(filename, dest_filename))
+        shutil.copyfile(filename, dest_filename)
     
     def process_newfiles(self, context):
         self.logger.info('starting to process new files')
         try:
-            self.newfile_livecycle()
+            self.newfile_lifecycle()
             self.logger.info('new files processed')
             context.bot.send_message(context.job.context, text='library up to date')
+            return
         except Exception as error:
             self.logger.exception(error)
+        except:
+            self.logger.error("Unexpected %s", sys.exc_info()[0])
+        context.bot.send_message(context.job.context, text='Job failed - please see logs')
     
     def command(self, params):
         try:
-            df = Popen(params, stdout=PIPE)
+            self.logger.debug('Command: {}'.format(' '.join(params)))
+            df = Popen(params, stdout=PIPE, stderr=PIPE)
             output, err = df.communicate()
+            if (err is not None and len(err)):
+                self.logger.error(err)
+                raise Exception("Command failed")
             return output.decode("utf-8")
         except CalledProcessError as e:
-            self.logger.error("Failure running command %s: %s", err, e)
+            self.logger.error("Failure running command %s", e)
+            raise
+        except Exception as error:
+            self.logger.exception(error)
+            raise
+        except:
+            self.logger.error("Unexpected %s", sys.exc_info()[0])
             raise
     
     
@@ -133,8 +156,12 @@ class Main:
             self.logger.info('newfiles command')
             context.job_queue.run_once(self.process_newfiles, 0, context=update.message.chat_id)
             update.message.reply_text('roger that')
+            return
         except Exception as error:
             self.logger.exception(error)
+        except:
+            self.logger.error("Unexpected %s", sys.exc_info()[0])
+        update.message.reply_text('Something went wrong')
     
     def error(self, update, context):
         """Log Errors caused by Updates."""
@@ -154,6 +181,8 @@ class Main:
             self.run()
         except Exception as error:
             self.logger.exception(error)
+        except:
+            self.logger.error("Unexpected %s", sys.exc_info()[0])
 
 
 class BotLogHandler(logging.StreamHandler):
