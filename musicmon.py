@@ -33,7 +33,7 @@ class Main:
         self.updater = Updater(config['default']['remote_token'], use_context=True)
         bot_handler = BotLogHandler(self.updater.bot, config['default']['log_chat_id'])
         bot_handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(message)s'))
-        self.logger.addHandler(bot_handler)
+        #self.logger.addHandler(bot_handler)
         self.logger.setLevel(logging.INFO)
 
         self.remote_dir = config['default']['remote_dir']
@@ -83,16 +83,18 @@ class Main:
                 self.logger.error('{} is invalid - ignoring'.format(zipped))
     
     
-    def copy_newfiles(self):
-        str_newfiles = command(['rclone', 'lsjson', '{}'.format(remote_dir)])
-        newfiles = json.loads(str_newfiles)
+    def query_newfiles(self):
+        str_newfiles = self.command(['rclone', 'lsjson', '{}'.format(self.remote_dir)])
+        return json.loads(str_newfiles)
     
-        os.makedirs(recieve_dir, exist_ok=True)
+    def copy_newfiles(self, newfiles):
+        os.makedirs(self.recieve_dir, exist_ok=True)
     
         for f in newfiles:
-            self.logger.info('Copying {} from {}'.format(f['Path'], remote_dir))
-            lsjson = command(['rclone', 'copy', '{}/{}'.format(remote_dir, f['Path']), recieve_dir])
-    
+            self.logger.info('Copying {} from {}'.format(f['Path'], self.remote_dir))
+            f['recieved'] = os.path.join(self.recieve_dir], f['Path'])
+            lsjson = self.command(['rclone', 'copy', '{}/{}'.format(self.remote_dir, f['Path']), f['recieved']])
+
     def cleanup(self):
         self.logger.info('Removing interum directories')
         shutil.rmtree(recieve_dir)
@@ -100,18 +102,17 @@ class Main:
     
     def newfile_livecycle(self):
         self.logger.info('Testing only so not doing anything')
-        #self.copy_newfiles()
-        #self.expand_newfiles()
+        newfiles = self.query_newfiles()
+        self.logger.info('new files to process: {}'.format(newfiles))
+        self.copy_newfiles(newfiles)
+        self.expand_newfiles(newfiles)
         #self.prep_newfiles()
         #self.cleanup()
     
     def process_newfiles(self, context):
         self.logger.info('starting to process new files')
-        info = context.bot.send_message(chat_id=self.log_chat_id, text='starting to process new fileslibrary up to date')
-        self.logger.info(info)
         try:
             self.newfile_livecycle()
-    
             self.logger.info('new files processed')
             context.bot.send_message(context.job.context, text='library up to date')
         except Exception as error:
@@ -145,8 +146,8 @@ class Main:
         dp = self.updater.dispatcher
         dp.add_handler(CommandHandler("newfiles", self.newfiles, pass_args=True, pass_job_queue=True, pass_chat_data=True))
         dp.add_error_handler(self.error)
-        updater.start_polling()
-        updater.idle()
+        self.updater.start_polling()
+        self.updater.idle()
 
     def main(self):
         try:
