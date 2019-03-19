@@ -98,7 +98,7 @@ class Main:
         shutil.rmtree(recieve_dir)
         shutil.rmtree(staging_dir)
     
-    def newfile_livecycle(self):
+    def newfile_licecycle(self):
         self.logger.info('Testing only so not doing anything')
         #self.copy_newfiles()
         #self.expand_newfiles()
@@ -106,11 +106,9 @@ class Main:
         #self.cleanup()
     
     def process_newfiles(self, context):
-        self.logger.info('starting to process new files')
-        info = context.bot.send_message(chat_id=self.log_chat_id, text='starting to process new fileslibrary up to date')
-        self.logger.info(info)
         try:
-            self.newfile_livecycle()
+            self.logger.info('starting to process new files')
+            self.newfile_licecycle()
     
             self.logger.info('new files processed')
             context.bot.send_message(context.job.context, text='library up to date')
@@ -134,6 +132,8 @@ class Main:
             update.message.reply_text('roger that')
         except Exception as error:
             self.logger.exception(error)
+        except:
+            self.logger.error("Unexpected %s", sys.exc_info()[0])
     
     def error(self, update, context):
         """Log Errors caused by Updates."""
@@ -145,14 +145,16 @@ class Main:
         dp = self.updater.dispatcher
         dp.add_handler(CommandHandler("newfiles", self.newfiles, pass_args=True, pass_job_queue=True, pass_chat_data=True))
         dp.add_error_handler(self.error)
-        updater.start_polling()
-        updater.idle()
+        self.updater.start_polling()
+        self.updater.idle()
 
     def main(self):
         try:
             self.run()
         except Exception as error:
             self.logger.exception(error)
+        except:
+            self.logger.error("Unexpected %s", sys.exc_info()[0])
 
 
 class BotLogHandler(logging.StreamHandler):
