@@ -42,58 +42,59 @@ class Main:
         self.staging_dir = config['default']['staging_dir']
         self.dest_dir = config['default']['dest_dir']
 
-
-    
-
-    
     def cleanup(self):
         self.logger.info('Removing interum directories')
         shutil.rmtree(self.recieve_dir)
         shutil.rmtree(self.staging_dir)
     
-    def newfile_lifecycle(self):
+    def newfile_lifecycle(self, context):
         newfiles = self.query_newfiles()
         self.logger.info('new files to process: {}'.format(newfiles))
-        self.copy_newfiles(newfiles)
-        self.expand_newfiles(newfiles)
-        self.prep_newfiles(newfiles)
-        self.cleanup()
+        self.copy_newfiles(context, newfiles)
     
     def query_newfiles(self):
         str_newfiles = self.command(['rclone', 'lsjson', '{}'.format(self.remote_dir)])
         return json.loads(str_newfiles)
     
-    def copy_newfiles(self, newfiles):
+    def copy_newfiles(self, context, newfiles):
         self.logger.info('Copying new files')
         os.makedirs(self.recieve_dir, exist_ok=True)
     
         for f in newfiles:
-            self.logger.info('Copying {} from {}'.format(f['Path'], self.remote_dir))
-            f['recieved'] = os.path.join(self.recieve_dir, f['Path'])
-            lsjson = self.command(['rclone', 'copy', '{}/{}'.format(self.remote_dir, f['Path']), self.recieve_dir])
+            try:
+                self.logger.info('Copying {} from {}'.format(f['Path'], self.remote_dir))
+                recieved = os.path.join(self.recieve_dir, f['Path'])
+                lsjson = self.command(['rclone', 'copy', '{}/{}'.format(self.remote_dir, f['Path']), self.recieve_dir])
+                self.expand_newfiles(context, received)
+                context.bot.send_message(context.job.context, text='New file {} copied into library'.format(zipped))
+            except:
+                self.logger.error("Unexpected %s", sys.exc_info()[0])
+                context.bot.send_message(context.job.context, text='Job failed - please see logs')
 
-    def expand_newfiles(self, newfiles):
+
+    def expand_newfiles(self, zipped):
         self.logger.info('Expanding new files')
         os.makedirs(self.staging_dir, exist_ok=True)
     
-        for newfile in newfiles:
-            zipped = newfile['recieved']
-            self.logger.info('unzipping {}'.format(zipped))
-            try:
-                zip_ref = zipfile.ZipFile(zipped, 'r')
-                newfile['filelist'] = zip_ref.namelist()
-                zip_ref.extractall(self.staging_dir)
-                zip_ref.close()
-            except zipfile.BadZipFile:
-                self.logger.error('{} is invalid - ignoring'.format(zipped))
+        self.logger.info('unzipping {}'.format(zipped))
+        try:
+            zip_ref = zipfile.ZipFile(zipped, 'r')
+            filelist = zip_ref.namelist()
+            zip_ref.extractall(self.staging_dir)
+            zip_ref.close()
+            self.prep_newfiles(filelist)
+            self.logger.info('New file {} complete - deleting'.format(zipped))
+            shutil.rm(zipped)
+        except zipfile.BadZipFile:
+            self.logger.error('{} is invalid - ignoring'.format(zipped))
+            
 
-    def prep_newfiles(self, newfiles):
-        self.logger.info('prepping new files {}'.format(newfiles))
-        for newfile in newfiles:
-            for filename in [os.path.join(self.staging_dir, f) for f in newfile['filelist']]:
-                dest_filename = self.replace_root(filename, self.staging_dir, self.dest_dir)
-                self.logger.info('File {} -> {}'.format(filename, dest_filename))
-                self.prep_newfile(filename, dest_filename)
+    def prep_newfiles(self, soundfilelist):
+        self.logger.info('prepping new files {}'.format(soundfilelist))
+        for filename in [os.path.join(self.staging_dir, f) for f in soundfilelist]:
+            dest_filename = self.replace_root(filename, self.staging_dir, self.dest_dir)
+            self.logger.info('File {} -> {}'.format(filename, dest_filename))
+            self.prep_newfile(filename, dest_filename)
 
     def replace_root(self, filename, old, new):
         return os.path.join(new, filename[filename.index(os.sep, len(old)) + len(os.sep):])
@@ -109,6 +110,8 @@ class Main:
             self.transcode_newfile(filename, dest_filename)
         else:
             self.copy_newfile(filename, dest_filename)
+
+        shutil.rm(filename)
     
     def transcode_newfile(self, filename, dest_filename):
         self.logger.info('transcoding {} -> {}'.format(filename, dest_filename))
@@ -121,7 +124,7 @@ class Main:
     def process_newfiles(self, context):
         self.logger.info('starting to process new files')
         try:
-            self.newfile_lifecycle()
+            self.newfile_lifecycle(context)
             self.logger.info('new files processed')
             context.bot.send_message(context.job.context, text='library up to date')
             return
