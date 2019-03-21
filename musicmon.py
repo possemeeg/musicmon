@@ -109,6 +109,8 @@ class Main:
     
         os.makedirs(os.path.dirname(dest_filename), exist_ok=True)
     
+        self.try_copy_image(filename, dest_filename):
+
         if stream is not None and (stream['sample_fmt'] == 's32' or int(stream['sample_rate']) > 44100):
             self.transcode_newfile(filename, dest_filename)
         else:
@@ -116,12 +118,17 @@ class Main:
 
         os.remove(filename)
     
+    def try_copy_image(self, filename, dest_filename):
+        try:
+            cover_jpg = os.path.join(os.path.dirname(dest_filename), "folder.jpg")
+            if not os.path.isfile(cover_jpg):
+                self.command(['ffmpeg', '-i', filename, '-an', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', cover_jpg])
+        except:
+            logger.debug('An attempt to extract an image from the file failed and is being ignored')
+
     def transcode_newfile(self, filename, dest_filename):
         self.logger.info('transcoding {} -> {}'.format(filename, dest_filename))
         self.command(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', dest_filename])
-        cover_jpg = os.path.join(os.path.dirname(dest_filename), "cover.jpg")
-        if not os.path.isfile(cover_jpg):
-            self.command(['ffmpeg', '-i', filename, '-an', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', cover_jpg])
     
     def copy_newfile(self, filename, dest_filename):
         self.logger.info('copying {} -> {}'.format(filename, dest_filename))
