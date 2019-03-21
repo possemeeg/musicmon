@@ -128,7 +128,8 @@ class Main:
 
     def transcode_newfile(self, filename, dest_filename):
         self.logger.info('transcoding {} -> {}'.format(filename, dest_filename))
-        self.command(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', dest_filename])
+        self.command(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-vn' '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', dest_filename])
+        self.command(['ffmpeg', '-i', filename, '-an' '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', dest_filename_image])
     
     def copy_newfile(self, filename, dest_filename):
         self.logger.info('copying {} -> {}'.format(filename, dest_filename))
