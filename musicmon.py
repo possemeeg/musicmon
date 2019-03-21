@@ -63,13 +63,15 @@ class Main:
         for f in newfiles:
             try:
                 self.logger.info('Copying {} from {}'.format(f['Path'], self.remote_dir))
-                recieved = os.path.join(self.recieve_dir, f['Path'])
-                lsjson = self.command(['rclone', 'copy', '{}/{}'.format(self.remote_dir, f['Path']), self.recieve_dir])
-                self.expand_newfiles(context, received)
+                zipped = os.path.join(self.recieve_dir, f['Path'])
+                remote = '{}/{}'.format(self.remote_dir, f['Path'])
+                self.command(['rclone', 'copy', remote, self.recieve_dir])
+                self.expand_newfiles(zipped)
+                self.command(['rclone', 'deletefile', remote])
                 context.bot.send_message(context.job.context, text='New file {} copied into library'.format(zipped))
             except:
                 self.logger.error("Unexpected %s", sys.exc_info()[0])
-                context.bot.send_message(context.job.context, text='Job failed - please see logs')
+                context.bot.send_message(context.job.context, text='Job failed for {} - please see logs'.format(f))
 
 
     def expand_newfiles(self, zipped):
@@ -84,7 +86,7 @@ class Main:
             zip_ref.close()
             self.prep_newfiles(filelist)
             self.logger.info('New file {} complete - deleting'.format(zipped))
-            shutil.rm(zipped)
+            os.remove(zipped)
         except zipfile.BadZipFile:
             self.logger.error('{} is invalid - ignoring'.format(zipped))
             
@@ -92,9 +94,10 @@ class Main:
     def prep_newfiles(self, soundfilelist):
         self.logger.info('prepping new files {}'.format(soundfilelist))
         for filename in [os.path.join(self.staging_dir, f) for f in soundfilelist]:
-            dest_filename = self.replace_root(filename, self.staging_dir, self.dest_dir)
-            self.logger.info('File {} -> {}'.format(filename, dest_filename))
-            self.prep_newfile(filename, dest_filename)
+            if os.path.isfile(filename):
+                dest_filename = self.replace_root(filename, self.staging_dir, self.dest_dir)
+                self.logger.info('File {} -> {}'.format(filename, dest_filename))
+                self.prep_newfile(filename, dest_filename)
 
     def replace_root(self, filename, old, new):
         return os.path.join(new, filename[filename.index(os.sep, len(old)) + len(os.sep):])
@@ -111,7 +114,7 @@ class Main:
         else:
             self.copy_newfile(filename, dest_filename)
 
-        shutil.rm(filename)
+        os.remove(filename)
     
     def transcode_newfile(self, filename, dest_filename):
         self.logger.info('transcoding {} -> {}'.format(filename, dest_filename))
