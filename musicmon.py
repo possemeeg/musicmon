@@ -68,10 +68,10 @@ class Main:
                 self.command(['rclone', 'copy', remote, self.recieve_dir])
                 self.expand_newfiles(zipped)
                 self.command(['rclone', 'deletefile', remote])
-                context.bot.send_message(context.job.context, text='New file {} copied into library'.format(zipped))
+                context.bot.send_message(context.job.context, text='{} copied into library'.format(f['Path']))
             except:
                 self.logger.error("Unexpected %s", sys.exc_info()[0])
-                context.bot.send_message(context.job.context, text='Job failed for {} - please see logs'.format(f))
+                context.bot.send_message(context.job.context, text='{} failed'.format(f['Path']))
 
 
     def expand_newfiles(self, zipped):
@@ -88,7 +88,7 @@ class Main:
             self.logger.info('New file {} complete - deleting'.format(zipped))
             os.remove(zipped)
         except zipfile.BadZipFile:
-            self.logger.error('{} is invalid - ignoring'.format(zipped))
+            self.logger.error('{} invalid zip file - ignoring'.format(zipped))
             
 
     def prep_newfiles(self, soundfilelist):
@@ -119,6 +119,9 @@ class Main:
     def transcode_newfile(self, filename, dest_filename):
         self.logger.info('transcoding {} -> {}'.format(filename, dest_filename))
         self.command(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', dest_filename])
+        cover_jpg = os.path.join(os.path.dirname(dest_filename), "cover.jpg")
+        if not os.path.isfile(cover_jpg):
+            self.command(['ffmpeg', '-i', filename, '-an', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', cover_jpg])
     
     def copy_newfile(self, filename, dest_filename):
         self.logger.info('copying {} -> {}'.format(filename, dest_filename))
