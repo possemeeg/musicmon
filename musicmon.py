@@ -27,7 +27,8 @@ log_file = /var/log/musicmon.log
 class Main:
     def __init__(self, config):
         self.logger = logging.getLogger("musicmon")
-        handler = RotatingFileHandler(config['default']['log_file'], maxBytes=14096, backupCount=2)
+        self.log_file = config['default']['log_file']
+        handler = RotatingFileHandler(self.log_file, maxBytes=14096, backupCount=2)
         handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(message)s'))
         self.logger.addHandler(handler)
         self.updater = Updater(config['default']['remote_token'], use_context=True)
@@ -71,7 +72,7 @@ class Main:
                 context.bot.send_message(context.job.context, text='{} copied into library'.format(f['Path']))
             except:
                 self.logger.error("Unexpected %s", sys.exc_info()[0])
-                context.bot.send_message(context.job.context, text='{} failed'.format(f['Path']))
+                context.bot.send_message(context.job.context, text='👎 - {} failed'.format(f['Path']))
 
 
     def expand_newfiles(self, zipped):
@@ -109,7 +110,7 @@ class Main:
     
         os.makedirs(os.path.dirname(dest_filename), exist_ok=True)
     
-        self.try_copy_image(filename, dest_filename):
+        self.try_copy_image(filename, dest_filename)
 
         if stream is not None and (stream['sample_fmt'] == 's32' or int(stream['sample_rate']) > 44100):
             self.transcode_newfile(filename, dest_filename)
@@ -128,8 +129,7 @@ class Main:
 
     def transcode_newfile(self, filename, dest_filename):
         self.logger.info('transcoding {} -> {}'.format(filename, dest_filename))
-        self.command(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-vn' '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', dest_filename])
-        self.command(['ffmpeg', '-i', filename, '-an' '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', dest_filename_image])
+        self.command(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', dest_filename])
     
     def copy_newfile(self, filename, dest_filename):
         self.logger.info('copying {} -> {}'.format(filename, dest_filename))
@@ -172,14 +172,18 @@ class Main:
         try:
             self.logger.info('newfiles command')
             context.job_queue.run_once(self.process_newfiles, 0, context=update.message.chat_id)
-            update.message.reply_text('roger that')
+            update.message.reply_text('👍')
             return
         except Exception as error:
             self.logger.exception(error)
         except:
             self.logger.error("Unexpected %s", sys.exc_info()[0])
-        update.message.reply_text('Something went wrong')
+        update.message.reply_text('👎 - Something went wrong')
     
+    def log(self, update, context):
+        update.message.reply_text('👍 - sending log')
+        update.message.reply_document(document=open(self.log_file, 'rb'))
+
     def error(self, update, context):
         """Log Errors caused by Updates."""
         self.logger.warning('Update "%s" caused error "%s"', update, context.error)
@@ -189,6 +193,7 @@ class Main:
 
         dp = self.updater.dispatcher
         dp.add_handler(CommandHandler("newfiles", self.newfiles, pass_args=True, pass_job_queue=True, pass_chat_data=True))
+        dp.add_handler(CommandHandler("log", self.log, pass_args=True, pass_job_queue=True, pass_chat_data=True))
         dp.add_error_handler(self.error)
         self.updater.start_polling()
         self.updater.idle()
