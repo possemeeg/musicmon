@@ -11,18 +11,9 @@ import sys
 from telegram.ext import Updater, CommandHandler, Job
 from time import sleep
 import configparser
-"""
-ffprobe -v error -show_entries stream=sample_fmt,sample_rate -of json  "./Gregorian/The Dark Side/Disc 1 - 06 - Close My Eyes Forever.flac"
-ffmpeg -i "$1" -c:a flac -sample_fmt s16 -ar 44100 "${S16}"
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    level=logging.INFO)
-
-remote_dir = pmgpcloud:music/sonos
-recieve_dir = /var/musicmon/received
-staging_dir = /var/musicmon/unzipped
-dest_dir = /mnt/sonos/
-log_file = /var/log/musicmon.log
-"""
+import pylast
+import urllib3
+from PIL import Image
 
 class Config:
     def __init__(self):
@@ -35,6 +26,10 @@ class Config:
         self.recieve_dir = config['default']['recieve_dir']
         self.staging_dir = config['default']['staging_dir']
         self.dest_dir = config['default']['dest_dir']
+        self.last_key = config['default']['last_key']
+        self.last_secret = config['default']['last_secret']
+        self.last_user = config['default']['last_user']
+        self.last_password_hash = config['default']['last_password_hash']
 
 class BotLogHandler(logging.StreamHandler):
     def __init__(self, bot, chat_id):
@@ -59,6 +54,24 @@ def run(config):
     logger.addHandler(bot_handler)
     logger.setLevel(logging.DEBUG)
 
+    class ImageProvider:
+        def __init__(self):
+            self.lastfm_network = pylast.LastFMNetwork(
+                api_key=config.last_key,
+                api_secret=config.last_secret,
+                username=config.last_user,
+                password_hash=config.last_password_hash,
+            )
+            self.http = urllib3.PoolManager()
+
+        def download_image(self, artist, album, image_path):
+            last_album = self.lastfm_network.get_album(artist, album)
+            png_path = '{}.png'.format(image_path)
+            with self.http.request('GET', last_album.get_cover_image(), preload_content=False) as r, open(png_path, 'wb') as out_file:       
+                shutil.copyfileobj(r, out_file)
+            Image.open(png_path).save(image_path, "JPEG")
+            os.remove(png_path)
+
     def bot_newfiles(update, context):
         def process_newfiles(context):
             def newfile_lifecycle(context):
@@ -76,47 +89,52 @@ def run(config):
                     except Exception as error:
                         logger.exception(error)
                         raise
+                def command_json(params):
+                    return json.loads(command(params))
+
                 def query_newfiles():
-                    str_newfiles = command(['rclone', 'lsjson', '{}'.format(config.remote_dir)])
-                    return json.loads(str_newfiles)
+                    return command_json(['rclone', 'lsjson', '{}'.format(config.remote_dir)])
 
                 def copy_newfiles(context, newfiles):
-
                     def expand_newfiles(zipped):
-
                         def prep_newfiles(soundfilelist):
-
                             def prep_newfile(filename, dest_filename):
-
-                                def transcode_newfile(filename, dest_filename):
+                                def transcode_newfile():
                                     logger.info('transcoding {} -> {}'.format(filename, dest_filename))
                                     command(['ffmpeg', '-i', filename, '-c:a', 'flac', '-sample_fmt', 's16', '-ar', '44100',
                                         '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', dest_filename])
 
-                                def copy_newfile(filename, dest_filename):
+                                def copy_newfile():
                                     logger.info('copying {} -> {}'.format(filename, dest_filename))
                                     shutil.copyfile(filename, dest_filename)
 
-                                def try_copy_image(filename, dest_filename):
+                                def try_copy_image():
+                                    cover_jpg = os.path.join(os.path.dirname(dest_filename), "folder.jpg")
+                                    if os.path.isfile(cover_jpg):
+                                        return
+
                                     try:
-                                        cover_jpg = os.path.join(os.path.dirname(dest_filename), "folder.jpg")
-                                        if not os.path.isfile(cover_jpg):
-                                            command(['ffmpeg', '-i', filename, '-an', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', cover_jpg])
+                                        command(['ffmpeg', '-i', filename, '-an', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', cover_jpg])
                                     except Exception as error:
                                         logger.debug('An attempt to extract an image from the file failed and is being ignored. {}'.format(error))
-        
-                                str_probe = command(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename])
-                                probe = json.loads(str_probe)
+    
+                                    try:
+                                        probe = command_json(['ffprobe','-v','error','-show_entries','format_tags=artist,album','-of','json',filename])
+                                        ImageProvider().download_image(probe['format']['tags']['ARTIST'], probe['format']['tags']['ALBUM'], cover_jpg)
+                                    except Exception as error:
+                                        logger.debug('An attempt to download an image for the file failed and is being ignored. {}'.format(error))
+
+                                probe = command_json(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename])
                                 stream = next(iter([s for s in probe['streams'] if 'sample_fmt' in s and 'sample_rate' in s]), None) if 'streams' in probe else None
                             
                                 os.makedirs(os.path.dirname(dest_filename), exist_ok=True)
                             
-                                try_copy_image(filename, dest_filename)
+                                try_copy_image()
 
                                 if stream is not None and (stream['sample_fmt'] == 's32' or int(stream['sample_rate']) > 44100):
-                                    transcode_newfile(filename, dest_filename)
+                                    transcode_newfile()
                                 else:
-                                    copy_newfile(filename, dest_filename)
+                                    copy_newfile()
 
                                 os.remove(filename)
 
@@ -156,10 +174,10 @@ def run(config):
                             expand_newfiles(zipped)
                             command(['rclone', 'deletefile', remote])
                             os.remove(zipped)
-                            context.bot.send_message(context.job.context, text='{} copied into library'.format(f['Path']))
+                            context.bot.send_message(context.job.context, text='🙂 - {} copied into library'.format(f['Path']))
                         except Exception as error:
                             logger.exception(error)
-                            context.bot.send_message(context.job.context, text='👎 - {} failed'.format(f['Path']))
+                            context.bot.send_message(context.job.context, text='😢 - {} failed'.format(f['Path']))
 
                 newfiles = query_newfiles()
                 logger.info('new files to process: {}'.format(newfiles))
@@ -169,20 +187,20 @@ def run(config):
             try:
                 newfile_lifecycle(context)
                 logger.info('new files processed')
-                context.bot.send_message(context.job.context, text='library up to date')
+                context.bot.send_message(context.job.context, text='🙂 - library up to date')
                 return
             except Exception as error:
                 logger.exception(error)
-            context.bot.send_message(context.job.context, text='Job failed - please see logs')
+            context.bot.send_message(context.job.context, text='😢 - Job failed')
 
         try:
             logger.info('newfiles requested')
             context.job_queue.run_once(process_newfiles, 0, context=update.message.chat_id)
-            update.message.reply_text('👍')
+            update.message.reply_text('👍 - processing files')
             return
         except Exception as error:
             logger.exception(error)
-        update.message.reply_text('👎 - Something went wrong')
+        update.message.reply_text('😢 - Something went wrong')
 
     def bot_log(update, context):
         update.message.reply_text('👍 - sending log')
