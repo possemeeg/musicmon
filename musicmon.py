@@ -69,8 +69,13 @@ def run(config):
             png_path = '{}.png'.format(image_path)
             with self.http.request('GET', last_album.get_cover_image(), preload_content=False) as r, open(png_path, 'wb') as out_file:       
                 shutil.copyfileobj(r, out_file)
-            Image.open(png_path).save(image_path, "JPEG")
-            os.remove(png_path)
+            try:
+                Image.open(png_path).convert('RGB').save(image_path, "JPEG")
+            except:
+                os.remove(image_path)
+                raise
+            finally:
+                os.remove(png_path)
 
     def bot_newfiles(update, context):
         def process_newfiles(context):
@@ -110,32 +115,42 @@ def run(config):
 
                                 def try_copy_image():
                                     cover_jpg = os.path.join(os.path.dirname(dest_filename), "folder.jpg")
-                                    if os.path.isfile(cover_jpg):
-                                        return
-
-                                    try:
+                                    def extract():
+                                        logger.info('Trying to extract image')
                                         command(['ffmpeg', '-i', filename, '-an', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', cover_jpg])
-                                    except Exception as error:
-                                        logger.debug('An attempt to extract an image from the file failed and is being ignored. {}'.format(error))
-    
-                                    try:
+
+                                    def download():
+                                        logger.info('Trying to download image')
                                         probe = command_json(['ffprobe','-v','error','-show_entries','format_tags=artist,album','-of','json',filename])
                                         ImageProvider().download_image(probe['format']['tags']['ARTIST'], probe['format']['tags']['ALBUM'], cover_jpg)
-                                    except Exception as error:
-                                        logger.debug('An attempt to download an image for the file failed and is being ignored. {}'.format(error))
 
-                                probe = command_json(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename])
-                                stream = next(iter([s for s in probe['streams'] if 'sample_fmt' in s and 'sample_rate' in s]), None) if 'streams' in probe else None
+                                    logger.info('Finding image')
+                                    for method in [extract, download]:
+                                        if os.path.isfile(cover_jpg):
+                                            logger.info('Image exists.')
+                                            return
+                                        try:
+                                            logger.debug('Attempting {}.'.format(method))
+                                            method()
+                                        except Exception as error:
+                                            logger.debug('An attempt to obtain an image failed and is being ignored. {}'.format(error))
+    
+                                def must_transcode():
+                                    try:
+                                        probe = command_json(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename])
+                                        stream = next(iter([s for s in probe['streams'] if 'sample_fmt' in s and 'sample_rate' in s]), None) if 'streams' in probe else None
+                                        return stream is not None and (stream['sample_fmt'] == 's32' or int(stream['sample_rate']) > 44100)
+                                    except:
+                                        return False
                             
                                 os.makedirs(os.path.dirname(dest_filename), exist_ok=True)
-                            
-                                try_copy_image()
 
-                                if stream is not None and (stream['sample_fmt'] == 's32' or int(stream['sample_rate']) > 44100):
+                                if must_transcode():
                                     transcode_newfile()
                                 else:
                                     copy_newfile()
 
+                                try_copy_image()
                                 os.remove(filename)
 
                             def replace_root(filename, old, new):
