@@ -116,41 +116,33 @@ def run(config):
                                 def try_copy_image():
                                     cover_jpg = os.path.join(os.path.dirname(dest_filename), "folder.jpg")
                                     def extract():
-                                        logger.info('Trying to extract image')
                                         command(['ffmpeg', '-i', filename, '-an', '-y', '-nostats', '-hide_banner', '-vsync', '2', '-loglevel', 'error', '-nostdin', cover_jpg])
 
                                     def download():
-                                        logger.info('Trying to download image')
                                         probe = command_json(['ffprobe','-v','error','-show_entries','format_tags=artist,album','-of','json',filename])
                                         ImageProvider().download_image(probe['format']['tags']['ARTIST'], probe['format']['tags']['ALBUM'], cover_jpg)
 
-                                    logger.info('Finding image')
-                                    for method in [extract, download]:
+                                    for method in {extract, download}:
                                         if os.path.isfile(cover_jpg):
-                                            logger.info('Image exists.')
                                             return
                                         try:
-                                            logger.debug('Attempting {}.'.format(method))
                                             method()
                                         except Exception as error:
-                                            logger.debug('An attempt to obtain an image failed and is being ignored. {}'.format(error))
+                                            logger.debug('An attempt to extract an image from the file failed and is being ignored. {}'.format(error))
     
-                                def must_transcode():
-                                    try:
-                                        probe = command_json(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename])
-                                        stream = next(iter([s for s in probe['streams'] if 'sample_fmt' in s and 'sample_rate' in s]), None) if 'streams' in probe else None
-                                        return stream is not None and (stream['sample_fmt'] == 's32' or int(stream['sample_rate']) > 44100)
-                                    except:
-                                        return False
+
+                                probe = command_json(['ffprobe','-v','error','-show_entries','stream=sample_fmt,sample_rate','-of','json',filename])
+                                stream = next(iter([s for s in probe['streams'] if 'sample_fmt' in s and 'sample_rate' in s]), None) if 'streams' in probe else None
                             
                                 os.makedirs(os.path.dirname(dest_filename), exist_ok=True)
+                            
+                                try_copy_image()
 
-                                if must_transcode():
+                                if stream is not None and (stream['sample_fmt'] == 's32' or int(stream['sample_rate']) > 44100):
                                     transcode_newfile()
                                 else:
                                     copy_newfile()
 
-                                try_copy_image()
                                 os.remove(filename)
 
                             def replace_root(filename, old, new):
@@ -221,6 +213,9 @@ def run(config):
         update.message.reply_text('👍 - sending log')
         update.message.reply_document(document=open(config.log_file, 'rb'))
 
+    def bot_status(update, context):
+        update.message.reply_text('👍')
+
     def bot_error(update, context):
         """Log Errors caused by Updates."""
         logger.error('Update "%s" caused error "%s"', update, context.error)
@@ -230,6 +225,7 @@ def run(config):
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("newfiles", bot_newfiles, pass_args=True, pass_job_queue=True, pass_chat_data=True))
     dp.add_handler(CommandHandler("log", bot_log, pass_args=True, pass_job_queue=True, pass_chat_data=True))
+    dp.add_handler(CommandHandler("status", bot_status, pass_args=True, pass_job_queue=True, pass_chat_data=True))
     dp.add_error_handler(bot_error)
     updater.start_polling()
     updater.idle()
